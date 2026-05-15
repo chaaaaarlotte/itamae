@@ -30,7 +30,11 @@ module Specinfra
 
     class Ssh < Exec
       def receive_file(from, to = nil)
-        scp_download!(from, to)
+        if to
+          scp_download!(from, to)
+        else
+          run_command("cat #{from.shellescape}").stdout
+        end
       end
 
       private

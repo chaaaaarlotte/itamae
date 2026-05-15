@@ -110,6 +110,30 @@ EOF
           it { is_expected.to eq(true) }
         end
       end
+
+      describe "#receive_file" do
+        let(:options) { {host: "example.com"} }
+        let!(:ssh) { described_class.new(options) }
+        let(:specinfra_backend) { ssh.instance_variable_get(:@backend) }
+        let(:file_path) { "/home/testuser/test.txt" }
+
+        context "when to is not specified" do
+          it "reads content via run_command to support sudo" do
+            result = double(stdout: "file content")
+            expect(specinfra_backend).to receive(:run_command).with("cat #{file_path.shellescape}").and_return(result)
+            expect(ssh.receive_file(file_path)).to eq("file content")
+          end
+        end
+
+        context "when to is specified" do
+          let(:dst) { "/tmp/dst" }
+
+          it "downloads via SCP" do
+            expect(specinfra_backend).to receive(:scp_download!).with(file_path, dst)
+            ssh.receive_file(file_path, dst)
+          end
+        end
+      end
     end
   end
 end
