@@ -30,10 +30,31 @@ module Specinfra
 
     class Ssh < Exec
       def receive_file(from, to = nil)
-        scp_download!(from, to)
+        return scp_download!(from, to) if to || !sudo?
+
+        # Keep the copy private until it can be read by the SSH login user.
+        tmpdir = run_command!("mktemp -d /tmp/itamae-read.XXXXXXXXXX").stdout.strip
+        begin
+          copy = File.join(tmpdir, 'content')
+          user = get_config(:ssh_options)[:user].shellescape
+          run_command!("cp -- #{from.shellescape} #{copy.shellescape} && " \
+                       "chmod 600 #{copy.shellescape} && " \
+                       "chown #{user} #{copy.shellescape} #{tmpdir.shellescape}")
+          scp_download!(copy)
+        ensure
+          run_command!("rm -rf #{tmpdir.shellescape}")
+        end
       end
 
       private
+
+      def run_command!(command)
+        result = run_command(command)
+        unless result.success?
+          raise Itamae::Backend::CommandExecutionError, "Command #{command.inspect} failed (exit status: #{result.exit_status})"
+        end
+        result
+      end
 
       def scp_download!(from, to, opt={})
         if get_config(:scp).nil?

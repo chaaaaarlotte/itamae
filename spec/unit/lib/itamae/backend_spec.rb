@@ -110,6 +110,71 @@ EOF
           it { is_expected.to eq(true) }
         end
       end
+
+      describe "#receive_file" do
+        let(:options) { {host: "example.com", user: "testuser", sudo: true} }
+        let!(:ssh) { described_class.new(options) }
+        let(:specinfra_backend) { ssh.instance_variable_get(:@backend) }
+        let(:file_path) { "/home/testuser/test.txt" }
+        let(:tmpdir) { '/tmp/itamae-read.1234567890' }
+        let(:copy) { "#{tmpdir}/content" }
+        let(:create_command) { 'mktemp -d /tmp/itamae-read.XXXXXXXXXX' }
+        let(:prepare_command) do
+          "cp -- #{file_path.shellescape} #{copy} && chmod 600 #{copy} && chown testuser #{copy} #{tmpdir}"
+        end
+        let(:cleanup_command) { "rm -rf #{tmpdir}" }
+        let(:success) { Specinfra::CommandResult.new(exit_status: 0) }
+        let(:failure) { Specinfra::CommandResult.new(exit_status: 1) }
+
+        before do
+          allow(specinfra_backend).to receive(:run_command).with(create_command).and_return(
+            Specinfra::CommandResult.new(stdout: "#{tmpdir}\n", exit_status: 0)
+          )
+          allow(specinfra_backend).to receive(:run_command).with(prepare_command).and_return(success)
+          allow(specinfra_backend).to receive(:run_command).with(cleanup_command).and_return(success)
+          allow(specinfra_backend).to receive(:scp_download!).with(copy).and_return('file content')
+        end
+
+        it "sets permissions and ownership before downloading, then removes the copy" do
+          expect(specinfra_backend).to receive(:run_command).with(prepare_command).ordered.and_return(success)
+          expect(specinfra_backend).to receive(:scp_download!).with(copy).ordered.and_return('file content')
+          expect(specinfra_backend).to receive(:run_command).with(cleanup_command).ordered.and_return(success)
+          expect(ssh.receive_file(file_path)).to eq('file content')
+        end
+
+        it "raises without downloading or cleaning up when directory creation fails" do
+          expect(specinfra_backend).to receive(:run_command).with(create_command).and_return(failure)
+          expect(specinfra_backend).not_to receive(:scp_download!)
+          expect(specinfra_backend).not_to receive(:run_command).with(cleanup_command)
+          expect { ssh.receive_file(file_path) }.to raise_error(Itamae::Backend::CommandExecutionError)
+        end
+
+        it "raises and cleans up without downloading when preparing the copy fails" do
+          expect(specinfra_backend).to receive(:run_command).with(prepare_command).and_return(failure)
+          expect(specinfra_backend).not_to receive(:scp_download!)
+          expect(specinfra_backend).to receive(:run_command).with(cleanup_command).and_return(success)
+          expect { ssh.receive_file(file_path) }.to raise_error(Itamae::Backend::CommandExecutionError)
+        end
+
+        it "preserves the SCP exception and cleans up when downloading fails" do
+          expect(specinfra_backend).to receive(:scp_download!).with(copy).and_raise(Net::SCP::Error)
+          expect { ssh.receive_file(file_path) }.to raise_error(Net::SCP::Error)
+          expect(specinfra_backend).to have_received(:run_command).with(cleanup_command)
+        end
+
+        it "downloads directly without creating a copy when sudo is disabled" do
+          specinfra_backend.set_config(:disable_sudo, true)
+          expect(specinfra_backend).not_to receive(:run_command)
+          expect(specinfra_backend).to receive(:scp_download!).with(file_path, nil).and_return('file content')
+          expect(ssh.receive_file(file_path)).to eq('file content')
+        end
+
+        it "downloads directly when a destination is specified" do
+          expect(specinfra_backend).not_to receive(:run_command)
+          expect(specinfra_backend).to receive(:scp_download!).with(file_path, '/tmp/dst')
+          ssh.receive_file(file_path, '/tmp/dst')
+        end
+      end
     end
   end
 end
